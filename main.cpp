@@ -1,34 +1,30 @@
-#pragma GCC optimize("O3,unroll-loops")
-#pragma GCC target("bmi,bmi2,lzcnt,popcnt")
-
 #include <bits/stdc++.h>
 
 using namespace std;
 using namespace chrono;
 
-const int CHECKPOINT_1 = 16;
-const int CHECKPOINT_2 = 25;
-
 mt19937 rng(high_resolution_clock::now().time_since_epoch().count());
 
-char rowNames[] = {'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'};
-char colNames[] = {'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i'};
-
-int values[] = {0, 1, 2, 3, 4, 5, 6, 7, 8};
-
 int board[9][9];
-int block[9][9];
-vector<pair<int, int>> tilesInBlock[9];
+int group[9][9];
+vector<pair<int, int>> tilesInGroup[9];
 
-int rowMask[9], colMask[9], blockMask[9];
+int violations[9][9][9];
+int candidatesCount[9][9];
+int solutions;
+
+vector<pair<int, int>> moves;
 
 void init();
+void reset();
+
+void fill(const int& i, const int& j, const int& value);
+void erase(const int& i, const int& j);
 
 void parseBoard(const string& str);
 void print();
-
-bool backtrack(const int& t, vector<pair<int, int>>& emptyTiles, int& solutionsCount, const int& solutionsCountUntilHalt);
-int getSolutionsCount(const int& solutionsCountUntilHalt);
+void rollback(const int& t);
+bool backtrack(const int& filled);
 
 int main()
 {
@@ -36,94 +32,15 @@ int main()
 
     init();
 
-    string input;
-    cin >> input;
+    // string initBoard(81, '0');
+    string initBoard = "008317000004205109000040070327160904901450000045700800030001060872604000416070080";
 
-    if (input != "Start")
-    {
-        int i = input[0] - 'A', j = input[1] - 'a', value = input[2] - '1';
-        board[i][j] = value;
-        rowMask[i] ^= 1 << board[i][j];
-        colMask[j] ^= 1 << board[i][j];
-        blockMask[block[i][j]] ^= 1 << board[i][j];
-        if (input.back() == '!')
-            return 0;
-    }
+    parseBoard(initBoard);
 
-    vector<pair<int, int>> validTiles;
-    vector<int> validValues;
+    print();
 
-    for (int turn = (input == "Start" ? 1 : 2); turn <= 81; turn += 2)
-    {
-        validTiles.clear();
-        for (int i = 0; i < 9; i++)
-            for (int j = 0; j < 9; j++)
-                if (board[i][j] == -1)
-                    validTiles.emplace_back(i, j);
-
-        shuffle(validTiles.begin(), validTiles.end(), rng);
-
-        for (const auto& [i, j] : validTiles)
-        {
-            int candidateMask = rowMask[i] & colMask[j] & blockMask[block[i][j]];
-
-            if (!candidateMask) continue;
-
-            validValues.clear();
-            while (candidateMask)
-            {
-                validValues.emplace_back(__builtin_ctz(candidateMask));
-                candidateMask ^= 1 << validValues.back();
-            }
-
-            shuffle(validValues.begin(), validValues.end(), rng);
-
-            bool madeMove = false;
-
-            for (auto &value : validValues)
-            {
-                if (!(candidateMask & (1 << value))) continue;
-
-                board[i][j] = value;
-                rowMask[i] ^= 1 << board[i][j];
-                colMask[j] ^= 1 << board[i][j];
-                blockMask[block[i][j]] ^= 1 << board[i][j];
-
-                int cnt = getSolutionsCount(turn <= CHECKPOINT_1 ? 1 : 2);
-
-                if (cnt == 1 && turn > CHECKPOINT_1)
-                {
-                    cout << rowNames[i] << colNames[j] << value + 1 << '!' << endl;
-                    return 0;
-                }
-
-                if (cnt && (turn <= CHECKPOINT_2 || getSolutionsCount(2) == 1))
-                {
-                    cout << rowNames[i] << colNames[j] << value + 1 << endl;
-                    madeMove = true;
-                    break;
-                }
-
-                rowMask[i] ^= 1 << board[i][j];
-                colMask[j] ^= 1 << board[i][j];
-                blockMask[block[i][j]] ^= 1 << board[i][j];
-                board[i][j] = -1;
-
-                candidateMask ^= 1 << value;
-            }
-
-            if (madeMove) break;
-        }
-
-        cin >> input;
-        int i = input[0] - 'A', j = input[1] - 'a', value = input[2] - '1';
-        board[i][j] = value;
-        rowMask[i] ^= 1 << board[i][j];
-        colMask[j] ^= 1 << board[i][j];
-        blockMask[block[i][j]] ^= 1 << board[i][j];
-        if (input.back() == '!')
-            return 0;
-    }
+    solutions = 0;
+    backtrack(81 - (int)count(initBoard.begin(), initBoard.end(), '0'));
 }
 
 void init()
@@ -131,29 +48,86 @@ void init()
     for (int i = 0; i < 9; i++)
         for (int j = 0; j < 9; j++)
         {
-            block[i][j] = i / 3 * 3 + j / 3;
-            tilesInBlock[block[i][j]].emplace_back(i, j);
+            board[i][j] = -1;
+            group[i][j] = i / 3 * 3 + j / 3;
+            tilesInGroup[group[i][j]].emplace_back(i, j);
         }
+}
+
+void reset()
+{
     for (int i = 0; i < 9; i++)
         for (int j = 0; j < 9; j++)
-            board[i][j] = -1;
-    for (int t = 0; t < 9; t++)
-        rowMask[t] = colMask[t] = blockMask[t] = (1 << 9) - 1;
+        {
+            for (int value = 0; value < 9; value++)
+                violations[i][j][value] = 0;
+            candidatesCount[i][j] = 9;
+        }
+}
+
+void fill(const int& i, const int& j, const int& value)
+{
+    assert(!violations[i][j][value]);
+
+    moves.emplace_back(i, j);
+
+    board[i][j] = value;
+
+    candidatesCount[i][j]--;
+    violations[i][j][value]++;
+
+    for (int _j = 0; _j < 9; _j++)
+        if (_j != j)
+            if (violations[i][_j][value]++ == 0)
+                candidatesCount[i][_j]--;
+
+    for (int _i = 0; _i < 9; _i++)
+        if (_i != i)
+            if (violations[_i][j][value]++ == 0)
+                candidatesCount[_i][j]--;
+
+    for (const auto& [_i, _j] : tilesInGroup[group[i][j]])
+        if (_i != i && _j != j)
+            if (violations[_i][_j][value]++ == 0)
+                candidatesCount[_i][_j]--;
+}
+
+void erase(const int& i, const int& j)
+{
+    assert(board[i][j] != -1);
+
+    moves.pop_back();
+
+    int value = board[i][j];
+
+    board[i][j] = -1;
+
+    candidatesCount[i][j]++;
+    violations[i][j][value]--;
+
+    for (int _j = 0; _j < 9; _j++)
+        if (_j != j)
+            if (--violations[i][_j][value] == 0)
+                candidatesCount[i][_j]++;
+
+    for (int _i = 0; _i < 9; _i++)
+        if (_i != i)
+            if (--violations[_i][j][value] == 0)
+                candidatesCount[_i][j]++;
+
+    for (const auto& [_i, _j] : tilesInGroup[group[i][j]])
+        if (_i != i && _j != j)
+            if (--violations[_i][_j][value] == 0)
+                candidatesCount[_i][_j]++;
 }
 
 void parseBoard(const string& str)
 {
-    for (int t = 0; t < 9; t++)
-        rowMask[t] = colMask[t] = blockMask[t] = (1 << 9) - 1;
+    reset();
     for (int i = 0; i < 9; i++)
         for (int j = 0; j < 9; j++)
-            if ('1' <= str[i * 9 + j] && str[i * 9 + j] <= '9')
-            {
-                board[i][j] = str[i * 9 + j] - '1';
-                rowMask[i] ^= 1 << board[i][j];
-                colMask[j] ^= 1 << board[i][j];
-                blockMask[block[i][j]] ^= 1 << board[i][j];
-            }
+            if (str[i * 9 + j] != '0')
+                fill(i, j, str[i * 9 + j] - '1');
 }
 
 void print()
@@ -176,7 +150,7 @@ void print()
             {
                 for (int dx = 0; dx < 3; dx++)
                     for (int dy = 0; dy < 3; dy++)
-                        if (rowMask[i] & colMask[j] & blockMask[block[i][j]] & (1 << (dx * 3 + dy)))
+                        if (!violations[i][j][dx * 3 + dy])
                             result[x + dx][y + dy] = (char)('1' + dx * 3 + dy);
             }
         }
@@ -191,54 +165,67 @@ void print()
     cout << "END OF BOARD\n" << endl;
 }
 
-bool backtrack(const int& t, vector<pair<int, int>>& emptyTiles, int& solutionsCount, const int& solutionsCountUntilHalt)
+void rollback(const int& t)
 {
-    if (solutionsCount == solutionsCountUntilHalt) return false;
-    if (t == emptyTiles.size()) return ++solutionsCount < solutionsCountUntilHalt;
-
-    nth_element(emptyTiles.begin() + t, emptyTiles.begin() + t, emptyTiles.end(), [&](const pair<int, int>& p1, const pair<int, int>& p2) -> bool {
-        return __builtin_popcount(rowMask[p1.first] & colMask[p1.second] & blockMask[block[p1.first][p1.second]])
-               < __builtin_popcount(rowMask[p2.first] & colMask[p2.second] & blockMask[block[p2.first][p2.second]]);
-    });
-
-    int i = emptyTiles[t].first, j = emptyTiles[t].second;
-
-    int candidateMask = rowMask[i] & colMask[j] & blockMask[block[i][j]];
-
-    while (candidateMask)
+    while (moves.size() > t)
     {
-        int value = __builtin_ctz(candidateMask);
-
-        board[i][j] = value;
-        rowMask[i] ^= 1 << board[i][j];
-        colMask[j] ^= 1 << board[i][j];
-        blockMask[block[i][j]] ^= 1 << board[i][j];
-
-        bool toBeContinued = backtrack(t + 1, emptyTiles, solutionsCount, solutionsCountUntilHalt);
-
-        rowMask[i] ^= 1 << board[i][j];
-        colMask[j] ^= 1 << board[i][j];
-        blockMask[block[i][j]] ^= 1 << board[i][j];
-        board[i][j] = -1;
-
-        if (!toBeContinued) return false;
-
-        candidateMask ^= 1 << value;
+        int i = moves.back().first, j = moves.back().second;
+        erase(i, j);
     }
-
-    return true;
 }
 
-int getSolutionsCount(const int& solutionsCountUntilHalt)
+bool backtrack(const int& filled)
 {
-    vector<pair<int, int>> emptyTiles;
+    if (solutions == 1) return false;
+
+    if (filled == 81)
+    {
+        print();
+        return ++solutions < 1;
+    }
+
+    int singleCandidatesCount = 0;
+    int t = (int)moves.size();
+    for (int i = 0; i < 9; i++)
+        for (int j = 0; j < 9; j++)
+            if (board[i][j] == -1 && candidatesCount[i][j] == 1)
+                for (int value = 0; value < 9; value++)
+                    if (!violations[i][j][value])
+                    {
+                        singleCandidatesCount++;
+                        fill(i, j, value);
+                        break;
+                    }
+
+    if (singleCandidatesCount)
+    {
+        if (!backtrack(filled + singleCandidatesCount))
+            return false;
+        rollback(t);
+        return true;
+    }
+
+    priority_queue<pair<int, pair<int, int>>> kweue;
+
     for (int i = 0; i < 9; i++)
         for (int j = 0; j < 9; j++)
             if (board[i][j] == -1)
-                emptyTiles.emplace_back(i, j);
+                kweue.push({- candidatesCount[i][j], {i, j}});
 
-    int solutionsCount = 0;
-    backtrack(0, emptyTiles, solutionsCount, solutionsCountUntilHalt);
+    while (!kweue.empty())
+    {
+        int i = kweue.top().second.first, j = kweue.top().second.second;
+        kweue.pop();
 
-    return solutionsCount;
+        for (int value = 0; value < 9; value++)
+            if (!violations[i][j][value])
+            {
+                fill(i, j, value);
+                if (!backtrack(filled + 1))
+                    return false;
+                erase(i, j);
+            }
+    }
+
+    return true;
 }
