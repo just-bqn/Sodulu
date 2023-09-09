@@ -6,18 +6,23 @@ using namespace std;
 using namespace chrono;
 
 const int CHECKPOINT_1 = 16;
-const int CHECKPOINT_2 = 64;
+const int CHECKPOINT_2 = 32;
+const int TIME_LIMIT_FOR_EACH_BAD_MOVE_CHECK = 1000;
 
 mt19937 rng(high_resolution_clock::now().time_since_epoch().count());
 
 char rowNames[] = {'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'};
 char colNames[] = {'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i'};
 
+vector<int> values = {7, 5, 3, 1, 8, 6, 4, 2, 0};
+
 int board[9][9];
 int block[9][9];
-vector<pair<int, int>> tilesInBlock[9];
+vector<pair<int, int>> tilesOfBlock[9];
 
 int rowMask[9], colMask[9], blockMask[9];
+
+vector<tuple<int, int, int, int>> uniqueRectanglesUtil;
 
 void init();
 
@@ -48,7 +53,6 @@ int main()
     }
 
     vector<pair<int, int>> validTiles;
-    vector<int> validValues;
 
     for (int turn = (input == "Start" ? 1 : 2); turn <= 81; turn += 2)
     {
@@ -58,33 +62,18 @@ int main()
                 if (board[i][j] == -1)
                     validTiles.emplace_back(i, j);
 
-        if (true)
-            shuffle(validTiles.begin(), validTiles.end(), rng);
-        else
-            sort(validTiles.begin(), validTiles.end(), [&](const pair<int, int>& p1, const pair<int, int>& p2) -> bool {
-                return __builtin_popcount(rowMask[p1.first] & colMask[p1.second] & blockMask[block[p1.first][p1.second]])
-                       < __builtin_popcount(rowMask[p2.first] & colMask[p2.second] & blockMask[block[p2.first][p2.second]]);
-            });
+        shuffle(validTiles.begin(), validTiles.end(), rng);
 
         for (const auto& [i, j] : validTiles)
         {
             int candidateMask = rowMask[i] & colMask[j] & blockMask[block[i][j]];
 
-            if (!candidateMask) continue;
-
-            validValues.clear();
-            while (candidateMask)
-            {
-                validValues.emplace_back(__builtin_ctz(candidateMask));
-                candidateMask ^= 1 << validValues.back();
-            }
-
-            shuffle(validValues.begin(), validValues.end(), rng);
-
             bool madeMove = false;
 
-            for (auto &value : validValues)
+            for (auto &value : values)
             {
+                if (!(candidateMask & (1 << value))) continue;
+
                 board[i][j] = value;
                 rowMask[i] ^= 1 << board[i][j];
                 colMask[j] ^= 1 << board[i][j];
@@ -102,7 +91,11 @@ int main()
                 {
                     bool badMove = false;
 
-                    if (turn > CHECKPOINT_2)
+                    if (turn > CHECKPOINT_2 && rng() % 3 == 0)
+                    {
+                        const auto begin = high_resolution_clock::now();
+                        bool timeLimitExceeded = false;
+
                         for (const auto& [_i, _j] : validTiles)
                             if (_i != i || _j != j)
                             {
@@ -110,9 +103,14 @@ int main()
 
                                 if (!_candidateMask) continue;
 
-                                validValues.clear();
                                 while (_candidateMask)
                                 {
+                                    if (duration_cast<milliseconds>(high_resolution_clock::now() - begin).count() > TIME_LIMIT_FOR_EACH_BAD_MOVE_CHECK)
+                                    {
+                                        timeLimitExceeded = true;
+                                        break;
+                                    }
+
                                     int _value = __builtin_ctz(_candidateMask);
 
                                     board[i][j] = value;
@@ -134,8 +132,9 @@ int main()
                                     _candidateMask ^= 1 << _value;
                                 }
 
-                                if (badMove) break;
+                                if (badMove || timeLimitExceeded) break;
                             }
+                    }
 
                     if (!badMove)
                     {
@@ -172,12 +171,19 @@ void init()
     for (int i = 0; i < 9; i++)
         for (int j = 0; j < 9; j++)
         {
-            block[i][j] = i / 3 * 3 + j / 3;
-            tilesInBlock[block[i][j]].emplace_back(i, j);
             board[i][j] = -1;
+            block[i][j] = i / 3 * 3 + j / 3;
+            tilesOfBlock[block[i][j]].emplace_back(i, j);
         }
     for (int t = 0; t < 9; t++)
         rowMask[t] = colMask[t] = blockMask[t] = (1 << 9) - 1;
+    for (int i = 0; i < 9; i++)
+        for (int _i = i; _i < 9; _i++)
+            if (i / 3 == _i / 3)
+                for (int j = 0; j < 9; j++)
+                    for (int _j = j; _j < 9; _j++)
+                        if (j / 3 != _j / 3)
+                            uniqueRectanglesUtil.emplace_back(i, _i, j, _j);
 }
 
 void parseBoard(const string& str)
@@ -232,6 +238,18 @@ void print()
 
 bool backtrack(const int& t, vector<pair<int, int>>& emptyTiles, int& solutionsCount, const int& solutionsCountUntilHalt)
 {
+    if (solutionsCount && solutionsCount < solutionsCountUntilHalt)
+    {
+        // Unique Rectangles
+        for (auto [i, _i, j, _j] : uniqueRectanglesUtil)
+            if (__builtin_popcount( rowMask[i] & rowMask[_i] & colMask[j] & colMask[_j] & blockMask[block[i][j]] & blockMask[block[_i][_j]] ) >= 2
+                || __builtin_popcount( rowMask[j] & rowMask[_j] & colMask[i] & colMask[_i] & blockMask[block[i][j]] & blockMask[block[_i][_j]] ) >= 2)
+            {
+                // assert(false);
+                solutionsCount = solutionsCountUntilHalt;
+                break;
+            }
+    }
     if (solutionsCount == solutionsCountUntilHalt) return false;
     if (t == emptyTiles.size()) return ++solutionsCount < solutionsCountUntilHalt;
 
@@ -241,7 +259,6 @@ bool backtrack(const int& t, vector<pair<int, int>>& emptyTiles, int& solutionsC
     });
 
     int i = emptyTiles[t].first, j = emptyTiles[t].second;
-
     int candidateMask = rowMask[i] & colMask[j] & blockMask[block[i][j]];
 
     while (candidateMask)
@@ -270,29 +287,6 @@ bool backtrack(const int& t, vector<pair<int, int>>& emptyTiles, int& solutionsC
 
 int getSolutionsCount(const int& solutionsCountUntilHalt)
 {
-    // Unique Rectangles
-    if (false)
-        for (int mask, i = 0; i < 9; i++)
-            for (int j = 0; j < 9; j++)
-                if (__builtin_popcount(rowMask[i] & colMask[j] & blockMask[block[i][j]]) >= 2)
-                    for (const auto& [_i, _j] : tilesInBlock[block[i][j]])
-                    {
-                        mask = rowMask[i] & colMask[j] & blockMask[block[i][j]] & rowMask[_i] & colMask[_j];
-                        if (__builtin_popcount(mask) >= 2)
-                        {
-                            if (_i == i && _j != j)
-                                for (int __i = 0; __i < 9; __i++)
-                                    if (block[__i][_j] != block[i][j])
-                                        if (__builtin_popcount(mask & rowMask[__i] & blockMask[block[__i][_j]]) >= 2)
-                                            return solutionsCountUntilHalt;
-                            if (_i != i && _j == j)
-                                for (int __j = 0; __j < 9; __j++)
-                                    if (block[_i][__j] != block[i][j])
-                                        if (__builtin_popcount(mask & colMask[__j] & blockMask[block[_i][__j]]) >= 2)
-                                            return solutionsCountUntilHalt;
-                        }
-                    }
-
     vector<pair<int, int>> emptyTiles;
     for (int i = 0; i < 9; i++)
         for (int j = 0; j < 9; j++)
