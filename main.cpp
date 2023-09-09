@@ -62,7 +62,13 @@ int main()
                 if (board[i][j] == -1)
                     validTiles.emplace_back(i, j);
 
-        shuffle(validTiles.begin(), validTiles.end(), rng);
+        if (true)
+            shuffle(validTiles.begin(), validTiles.end(), rng);
+        else
+            sort(validTiles.begin(), validTiles.end(), [&](const pair<int, int>& p1, const pair<int, int>& p2) -> bool {
+                return __builtin_popcount(rowMask[p1.first] & colMask[p1.second] & blockMask[block[p1.first][p1.second]])
+                       > __builtin_popcount(rowMask[p2.first] & colMask[p2.second] & blockMask[block[p2.first][p2.second]]);
+            });
 
         for (const auto& [i, j] : validTiles)
         {
