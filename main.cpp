@@ -7,7 +7,7 @@ using namespace chrono;
 
 const int CHECKPOINT_1 = 16;
 const int CHECKPOINT_2 = 32;
-const int TIME_LIMIT_FOR_EACH_BAD_MOVE_CHECK = 1000;
+const int TIME_LIMIT_PER_MOVE = 1500;
 
 mt19937 rng(high_resolution_clock::now().time_since_epoch().count());
 
@@ -29,6 +29,10 @@ void init();
 void parseBoard(const string& str);
 void print();
 
+void makeMove(const string& move);
+void makeMove(const int& i, const int& j, const int& value);
+void undoMove(const int& i, const int& j);
+
 bool backtrack(const int& t, vector<pair<int, int>>& emptyTiles, int& solutionsCount, const int& solutionsCountUntilHalt);
 int getSolutionsCount(const int& solutionsCountUntilHalt);
 
@@ -43,26 +47,24 @@ int main()
 
     if (input != "Start")
     {
-        int i = input[0] - 'A', j = input[1] - 'a', value = input[2] - '1';
-        board[i][j] = value;
-        rowMask[i] ^= 1 << board[i][j];
-        colMask[j] ^= 1 << board[i][j];
-        blockMask[block[i][j]] ^= 1 << board[i][j];
-        if (input.back() == '!')
-            return 0;
+        makeMove(input);
+        if (input.back() == '!') return 0;
     }
 
     vector<pair<int, int>> validTiles;
 
     for (int turn = (input == "Start" ? 1 : 2); turn <= 81; turn += 2)
     {
+        const auto begin = high_resolution_clock::now();
+        bool timeLimitExceeded = false;
+
         validTiles.clear();
         for (int i = 0; i < 9; i++)
             for (int j = 0; j < 9; j++)
                 if (board[i][j] == -1)
                     validTiles.emplace_back(i, j);
 
-        if (true)
+        if (turn <= CHECKPOINT_1)
             shuffle(validTiles.begin(), validTiles.end(), rng);
         else
             sort(validTiles.begin(), validTiles.end(), [&](const pair<int, int>& p1, const pair<int, int>& p2) -> bool {
@@ -70,22 +72,22 @@ int main()
                        > __builtin_popcount(rowMask[p2.first] & colMask[p2.second] & blockMask[block[p2.first][p2.second]]);
             });
 
+        bool madeMove = false;
+        string potentialMove;
+
         for (const auto& [i, j] : validTiles)
         {
             int candidateMask = rowMask[i] & colMask[j] & blockMask[block[i][j]];
-
-            bool madeMove = false;
 
             for (auto &value : values)
             {
                 if (!(candidateMask & (1 << value))) continue;
 
-                board[i][j] = value;
-                rowMask[i] ^= 1 << board[i][j];
-                colMask[j] ^= 1 << board[i][j];
-                blockMask[block[i][j]] ^= 1 << board[i][j];
+                makeMove(i, j, value);
 
                 int cnt = getSolutionsCount(turn <= CHECKPOINT_1 ? 1 : 2);
+
+                undoMove(i, j);
 
                 if (cnt == 1 && turn > CHECKPOINT_1)
                 {
@@ -93,82 +95,36 @@ int main()
                     return 0;
                 }
 
-                if (cnt)
+                if (cnt && (potentialMove.empty() || rng() % 5 == 0))
                 {
-                    bool badMove = false;
+                    potentialMove = rowNames[i];
+                    potentialMove += colNames[j];
+                    potentialMove += '1' + value;
 
-                    if (turn > CHECKPOINT_2 && rng() % 3 == 0)
-                    {
-                        const auto begin = high_resolution_clock::now();
-                        bool timeLimitExceeded = false;
-
-                        for (const auto& [_i, _j] : validTiles)
-                            if (_i != i || _j != j)
-                            {
-                                int _candidateMask = rowMask[_i] & colMask[_j] & blockMask[block[_i][_j]];
-
-                                if (!_candidateMask) continue;
-
-                                while (_candidateMask)
-                                {
-                                    if (duration_cast<milliseconds>(high_resolution_clock::now() - begin).count() > TIME_LIMIT_FOR_EACH_BAD_MOVE_CHECK)
-                                    {
-                                        timeLimitExceeded = true;
-                                        break;
-                                    }
-
-                                    int _value = __builtin_ctz(_candidateMask);
-
-                                    board[i][j] = value;
-                                    rowMask[i] ^= 1 << board[i][j];
-                                    colMask[j] ^= 1 << board[i][j];
-                                    blockMask[block[i][j]] ^= 1 << board[i][j];
-
-                                    if (getSolutionsCount(2) == 1)
-                                    {
-                                        badMove = true;
-                                        break;
-                                    }
-
-                                    rowMask[i] ^= 1 << board[i][j];
-                                    colMask[j] ^= 1 << board[i][j];
-                                    blockMask[block[i][j]] ^= 1 << board[i][j];
-                                    board[i][j] = -1;
-
-                                    _candidateMask ^= 1 << _value;
-                                }
-
-                                if (badMove || timeLimitExceeded) break;
-                            }
-                    }
-
-                    if (!badMove)
-                    {
-                        cout << rowNames[i] << colNames[j] << value + 1 << endl;
-                        madeMove = true;
-                        break;
-                    }
+                    if (turn <= CHECKPOINT_1) break;
                 }
 
-                rowMask[i] ^= 1 << board[i][j];
-                colMask[j] ^= 1 << board[i][j];
-                blockMask[block[i][j]] ^= 1 << board[i][j];
-                board[i][j] = -1;
+                if (!potentialMove.empty() && duration_cast<milliseconds>(high_resolution_clock::now() - begin).count() > TIME_LIMIT_PER_MOVE)
+                {
+                    timeLimitExceeded = true;
+                    break;
+                }
 
                 candidateMask ^= 1 << value;
             }
 
-            if (madeMove) break;
+            if (madeMove || timeLimitExceeded) break;
+        }
+
+        if (!madeMove)
+        {
+            cout << potentialMove << endl;
+            makeMove(potentialMove);
         }
 
         cin >> input;
-        int i = input[0] - 'A', j = input[1] - 'a', value = input[2] - '1';
-        board[i][j] = value;
-        rowMask[i] ^= 1 << board[i][j];
-        colMask[j] ^= 1 << board[i][j];
-        blockMask[block[i][j]] ^= 1 << board[i][j];
-        if (input.back() == '!')
-            return 0;
+        makeMove(input);
+        if (input.back() == '!') return 0;
     }
 }
 
@@ -181,8 +137,10 @@ void init()
             block[i][j] = i / 3 * 3 + j / 3;
             tilesOfBlock[block[i][j]].emplace_back(i, j);
         }
+
     for (int t = 0; t < 9; t++)
         rowMask[t] = colMask[t] = blockMask[t] = (1 << 9) - 1;
+
     for (int i = 0; i < 9; i++)
         for (int _i = i; _i < 9; _i++)
             if (i / 3 == _i / 3)
@@ -196,6 +154,7 @@ void parseBoard(const string& str)
 {
     for (int t = 0; t < 9; t++)
         rowMask[t] = colMask[t] = blockMask[t] = (1 << 9) - 1;
+
     for (int i = 0; i < 9; i++)
         for (int j = 0; j < 9; j++)
             if ('1' <= str[i * 9 + j] && str[i * 9 + j] <= '9')
@@ -242,9 +201,34 @@ void print()
     cout << "END OF BOARD\n" << endl;
 }
 
+void makeMove(const string& move)
+{
+    int i = move[0] - 'A', j = move[1] - 'a', value = move[2] - '1';
+    board[i][j] = value;
+    rowMask[i] ^= 1 << board[i][j];
+    colMask[j] ^= 1 << board[i][j];
+    blockMask[block[i][j]] ^= 1 << board[i][j];
+}
+
+void makeMove(const int &i, const int& j, const int& value)
+{
+    board[i][j] = value;
+    rowMask[i] ^= 1 << board[i][j];
+    colMask[j] ^= 1 << board[i][j];
+    blockMask[block[i][j]] ^= 1 << board[i][j];
+}
+
+void undoMove(const int &i, const int& j)
+{
+    rowMask[i] ^= 1 << board[i][j];
+    colMask[j] ^= 1 << board[i][j];
+    blockMask[block[i][j]] ^= 1 << board[i][j];
+    board[i][j] = -1;
+}
+
 bool backtrack(const int& t, vector<pair<int, int>>& emptyTiles, int& solutionsCount, const int& solutionsCountUntilHalt)
 {
-    if (solutionsCount && solutionsCount < solutionsCountUntilHalt)
+    if (false && solutionsCount && solutionsCount < solutionsCountUntilHalt)
     {
         // Unique Rectangles
         for (auto [i, _i, j, _j] : uniqueRectanglesUtil)
@@ -271,17 +255,11 @@ bool backtrack(const int& t, vector<pair<int, int>>& emptyTiles, int& solutionsC
     {
         int value = __builtin_ctz(candidateMask);
 
-        board[i][j] = value;
-        rowMask[i] ^= 1 << board[i][j];
-        colMask[j] ^= 1 << board[i][j];
-        blockMask[block[i][j]] ^= 1 << board[i][j];
+        makeMove(i, j, value);
 
         bool toBeContinued = backtrack(t + 1, emptyTiles, solutionsCount, solutionsCountUntilHalt);
 
-        rowMask[i] ^= 1 << board[i][j];
-        colMask[j] ^= 1 << board[i][j];
-        blockMask[block[i][j]] ^= 1 << board[i][j];
-        board[i][j] = -1;
+        undoMove(i, j);
 
         if (!toBeContinued) return false;
 
