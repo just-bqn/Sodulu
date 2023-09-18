@@ -101,7 +101,13 @@ int main()
                     potentialMove += colNames[j];
                     potentialMove += '1' + value;
 
-                    if (turn <= CHECKPOINT_1) break;
+                    if (turn <= CHECKPOINT_1)
+                    {
+                        cout << potentialMove << endl;
+                        makeMove(potentialMove);
+                        madeMove = true;
+                        break;
+                    }
                 }
 
                 if (!potentialMove.empty() && duration_cast<milliseconds>(high_resolution_clock::now() - begin).count() > TIME_LIMIT_PER_MOVE)
